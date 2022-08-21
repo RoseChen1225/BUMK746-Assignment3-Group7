@@ -1,0 +1,566 @@
+# Check Packages
+library(class)
+library(dplyr)
+library(klaR)
+library(e1071)
+library(rpart)
+library(randomForest)
+library(leaps)
+library(lars)
+library(MASS)
+library(caret)
+library(pROC)
+library(C50)
+library(gbm)
+
+# Upload Data
+getwd()
+data = read.csv("hotel_bookings.csv",header=TRUE) 
+
+# Clean Data
+arr_date_month = data$arrival_date_month
+arr_date_month = replace(arr_date_month, arr_date_month=="January", 1)
+arr_date_month = replace(arr_date_month, arr_date_month=="February", 2)
+arr_date_month = replace(arr_date_month, arr_date_month=="March", 3)
+arr_date_month = replace(arr_date_month, arr_date_month=="April", 4)
+arr_date_month = replace(arr_date_month, arr_date_month=="May", 5)
+arr_date_month = replace(arr_date_month, arr_date_month=="June", 6)
+arr_date_month = replace(arr_date_month, arr_date_month=="July", 7)
+arr_date_month = replace(arr_date_month, arr_date_month=="August", 8)
+arr_date_month = replace(arr_date_month, arr_date_month=="September", 9)
+arr_date_month = replace(arr_date_month, arr_date_month=="October", 10)
+arr_date_month = replace(arr_date_month, arr_date_month=="November", 11)
+arr_date_month = replace(arr_date_month, arr_date_month=="December", 12)
+arr_date_month = as.numeric(arr_date_month)
+data$arrival_date_month = arr_date_month
+newdata = data[c(1:5,8:25,28:30)]
+
+# transform dummy variable
+newdata$PRT = ifelse(newdata$country=='PRT',1,0)
+
+# Deal with Missing
+newdata[!complete.cases(newdata),]
+newdata$children = ifelse(is.na(newdata$children), mean(newdata$children,na.rm=TRUE),newdata$children)
+
+# Cut Outliers
+newdata=subset(newdata,newdata$lead_time<=500)
+newdata=subset(newdata,newdata$stays_in_weekend_nights<=5)
+newdata=subset(newdata,newdata$adults<=4)
+newdata=subset(newdata,newdata$children<=5)
+newdata=subset(newdata,newdata$babies<=3)
+newdata=subset(newdata,newdata$booking_changes<=6)
+
+# Divide the Data by hotel
+datar = subset(newdata,newdata$hotel=="Resort Hotel")
+datac = subset(newdata,newdata$hotel=="City Hotel")
+
+# Random Splitting Data for Resort Hotel Data
+set.seed(746)
+rtrain_ind = createDataPartition(y = datar$is_canceled,p=.8,list = FALSE)
+rtraining = datar[rtrain_ind,]
+rtest = datar[-rtrain_ind,]
+# Check Balance
+prop.table(table(datar$is_canceled))
+prop.table(table(rtraining$is_canceled))
+prop.table(table(rtest$is_canceled))
+
+# Random Splitting Data for City Hotel Data
+set.seed(746)
+ctrain_ind = createDataPartition(y = datac$is_canceled,p=.8,list = FALSE)
+ctraining = datac[ctrain_ind,]
+ctest = datac[-ctrain_ind,]
+# Check Balance
+prop.table(table(datac$is_canceled))
+prop.table(table(ctraining$is_canceled))
+prop.table(table(ctest$is_canceled))
+
+## Classification Tree
+# Classification Tree For City Hotel
+set.seed(746)
+T_ch = rpart(is_canceled ~ lead_time+arrival_date_year+arrival_date_month
+              +stays_in_weekend_nights+stays_in_week_nights
+              +adults+children+babies+meal
+              +market_segment+distribution_channel
+              +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled+reserved_room_type
+              +assigned_room_type+booking_changes+deposit_type
+              +adr
+              +required_car_parking_spaces+total_of_special_requests+PRT,data = ctraining, method = 'class', parms = list(split = 'information'),control=rpart.control(cp=0.00001))
+
+printcp(T_ch)
+plotcp(T_ch)
+#prune when cp= 8.0725e-05, x_error is 0.36712 which is the smallest
+T_ch_prune = prune(T_ch, cp=8.0725e-05)
+plot(T_ch_prune, uniform=TRUE)
+text(T_ch_prune)
+# Confusion Matrix
+# Actual Values in Columns, predictions in rows
+CT_ctrain_pruned =table(predict(T_ch_prune, ctraining, type="class"), ctraining$is_canceled)
+# Predict on the testing data
+CT_ctest_pruned =table(predict(T_ch_prune, ctest, type="class"), ctest$is_canceled)
+# Precision & Recall & F1
+precision_ctest_ctpruned = CT_ctest_pruned[2,2]/(CT_ctest_pruned[2,2]+CT_ctest_pruned[2,1])
+recall_ctest_ctpruned = CT_ctest_pruned[2,2]/(CT_ctest_pruned[2,2]+CT_ctest_pruned[1,2])
+f1_ctest_ctpruned = 2/(1/precision_ctest_ctpruned + 1/recall_ctest_ctpruned)
+f1_ctest_ctpruned
+
+# Classification Tree For Resort Hotel
+set.seed(746)
+T_rh = rpart(is_canceled ~ lead_time+arrival_date_year+arrival_date_month
+              +stays_in_weekend_nights+stays_in_week_nights
+              +adults+children+babies+meal
+              +market_segment+distribution_channel
+              +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled
+              +booking_changes+deposit_type
+              +adr
+              +required_car_parking_spaces+total_of_special_requests+PRT,data = rtraining, method = 'class', parms = list(split = 'information'),control=rpart.control(cp=0.00001))
+
+printcp(T_rh)
+plotcp(T_rh)
+#prune when cp= 3.4075e-04 , x_error is 0.44264 which is the smallest
+T_rh_prune = prune(T_rh, cp=3.4075e-04 )
+plot(T_rh_prune, uniform=TRUE)
+text(T_rh_prune)
+# Confusion Matrix
+# Actual Values in Columns, predictions in rows
+CT_rtrain_pruned=table(predict(T_rh_prune, rtraining, type="class"), rtraining$is_canceled)
+#predict on the testing data
+CT_rtest_pruned=table(predict(T_rh_prune, rtest, type="class"), rtest$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_ctpruned = CT_rtest_pruned[2,2]/(CT_rtest_pruned[2,2]+CT_rtest_pruned[2,1])
+recall_rtest_ctpruned = CT_rtest_pruned[2,2]/(CT_rtest_pruned[2,2]+CT_rtest_pruned[1,2])
+f1_rtest_ctpruned = 2/(1/precision_rtest_ctpruned + 1/recall_rtest_ctpruned)
+f1_rtest_ctpruned
+
+# GBM
+# GBM For City Hotel
+gbm_ctraining = ctraining %>%
+  mutate(across(where(is.character), factor)) %>%   as_tibble()
+gbm_ctest = ctest %>%
+  mutate(across(where(is.character), factor)) %>%   as_tibble()
+gbm_ctraining[["y_num"]] = ifelse(ctraining[["is_canceled"]] == "1", 1, 0)
+gbm_ctest[["y_num"]] = ifelse(ctest[["is_canceled"]] == "1", 1, 0)
+gbmfit_ctraining = gbm(y_num ~ lead_time+arrival_date_year+arrival_date_month
+                        +stays_in_weekend_nights+stays_in_week_nights
+                        +adults+children+babies+meal
+                        +market_segment+distribution_channel
+                        +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled+reserved_room_type
+                        +assigned_room_type+booking_changes+deposit_type
+                        +adr
+                        +required_car_parking_spaces+total_of_special_requests+PRT, data = gbm_ctraining, n.trees = 1000)
+
+# Predict on the training data
+pred_gbm_ctrain = ifelse(predict(gbmfit_ctraining, gbm_ctraining, n.trees=1000, type="response")>0.5, 1, 0)
+GBM_ctrain=table(pred_gbm_ctrain, gbm_ctraining$is_canceled)
+# Predict on the testing data
+pred_gbm_ctest = ifelse(predict(gbmfit_ctraining, gbm_ctest, n.trees=1000, type="response")>0.5, 1, 0)
+GBM_ctest=table(pred_gbm_ctest, gbm_ctest$is_canceled)
+# Precision & Recall & F1 score
+precision_ctest_gbm = GBM_ctest[2,2]/(GBM_ctest[2,2]+GBM_ctest[2,1])
+recall_ctest_gbm = GBM_ctest[2,2]/(GBM_ctest[2,2]+GBM_ctest[1,2])
+f1_ctest_gbm = 2/(1/precision_ctest_gbm + 1/recall_ctest_gbm)
+f1_ctest_gbm
+
+# GBM For Resort Hotel
+gbm_rtraining = rtraining %>%
+  mutate(across(where(is.character), factor)) %>%   as_tibble()
+gbm_rtest = rtest %>%
+  mutate(across(where(is.character), factor)) %>%   as_tibble()
+gbm_rtraining[["y_num"]] = ifelse(rtraining[["is_canceled"]] == "1", 1, 0)
+gbm_rtest[["y_num"]] = ifelse(rtest[["is_canceled"]] == "1", 1, 0)
+gbmfit_rtraining = gbm(y_num ~ lead_time+arrival_date_year+arrival_date_month
+                        +stays_in_weekend_nights+stays_in_week_nights
+                        +adults+children+babies+meal
+                        +market_segment+distribution_channel
+                        +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled+booking_changes+deposit_type
+                        +adr
+                        +required_car_parking_spaces+total_of_special_requests+PRT, data = gbm_rtraining, n.trees = 1000)
+
+# Predict on the training data
+pred_gbm_rtrain =ifelse(predict(gbmfit_rtraining, gbm_rtraining, n.trees=1000, type="response")>0.5, 1, 0)
+GBM_rtrain=table(pred_gbm_rtrain, gbm_rtraining$is_canceled)
+# Predict on the testing data
+pred_gbm_rtest = ifelse(predict(gbmfit_rtraining, gbm_rtest, n.trees=1000, type="response")>0.5, 1, 0)
+GBM_rtest=table(pred_gbm_rtest, gbm_rtest$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_gbm = GBM_rtest[2,2]/(GBM_rtest[2,2]+GBM_rtest[2,1])
+recall_rtest_gbm = GBM_rtest[2,2]/(GBM_rtest[2,2]+GBM_rtest[1,2])
+f1_rtest_gbm = 2/(1/precision_rtest_gbm + 1/recall_rtest_gbm)
+f1_rtest_gbm
+
+## KNN
+# KNN for Resort Hotel
+train_knn_r = rtraining[c(3:10,15:17,20,24:27)]
+test_knn_r = rtest[c(3:10,15:17,20,24:27)]
+cl_knn_trainr = rtraining$is_canceled
+cl_knn_testr = rtest$is_canceled
+
+err_by_rknn = rep(0, 10)
+for(k in 1:10) {
+  res_rknn = knn(train_knn_r, test_knn_r, cl_knn_trainr, k = k, prob=TRUE)
+  err_by_rknn[k] = sum(abs(as.numeric(res_rknn)-1-cl_knn_testr))
+}
+cbind(seq(1,10), err_by_rknn)
+# When K =1, error count for resort hotel is lowest.
+res_rknn_1 = knn(train_knn_r, test_knn_r, cl_knn_trainr, k = 1, prob=TRUE)
+cbind(as.numeric(res_rknn_1)-1, cl_knn_testr) 
+err_rknn_1 = sum(abs(as.numeric(res_rknn_1)-1-cl_knn_testr)) 
+err_rknn_1
+# Confusion Matrix
+as.factor(res_rknn_1)
+KNN_rtest=table(factor(res_rknn_1, levels=min(rtest$is_canceled):max(rtest$is_canceled)), 
+      factor(rtest$is_canceled, levels=min(rtest$is_canceled):max(rtest$is_canceled)))
+KNN_rtest
+# Precision & Recall & F1 score
+precision_rtest_knn = KNN_rtest[2,2]/(KNN_rtest[2,2]+KNN_rtest[2,1])
+recall_rtest_knn = KNN_rtest[2,2]/(KNN_rtest[2,2]+KNN_rtest[1,2])
+f1_rtest_knn = 2/(1/precision_rtest_knn + 1/recall_rtest_knn)
+f1_rtest_knn
+
+# KNN for City Hotel
+train_knn_c = ctraining[c(3:10,15:17,20,24:27)]
+test_knn_c = ctest[c(3:10,15:17,20,24:27)]
+cl_knn_trainc = ctraining$is_canceled
+cl_knn_testc = ctest$is_canceled
+
+err_by_cknn = rep(0, 10)
+for(k in 1:10) {
+  res_cknn = knn(train_knn_c, test_knn_c, cl_knn_trainc, k = k, prob=TRUE)
+  err_by_cknn[k] = sum(abs(as.numeric(res_cknn)-1-cl_knn_testc))
+}
+cbind(seq(1,10), err_by_cknn)
+# When K =1, error count for city hotel is lowest.
+res_cknn_1 = knn(train_knn_c, test_knn_c, cl_knn_trainc, k = 1, prob=TRUE)
+cbind(as.numeric(res_cknn_1)-1, cl_knn_testc) 
+err_cknn_1 = sum(abs(as.numeric(res_cknn_1)-1-cl_knn_testc)) 
+err_cknn_1
+# Confusion Matrix
+as.factor(res_cknn_1)
+KNN_ctest=table(factor(res_cknn_1, levels=min(ctest$is_canceled):max(ctest$is_canceled)), 
+                factor(ctest$is_canceled, levels=min(ctest$is_canceled):max(ctest$is_canceled)))
+KNN_ctest
+# Precision & Recall & F1 score
+precision_ctest_knn = KNN_ctest[2,2]/(KNN_ctest[2,2]+KNN_ctest[2,1])
+recall_ctest_knn = KNN_ctest[2,2]/(KNN_ctest[2,2]+KNN_ctest[1,2])
+f1_ctest_knn = 2/(1/precision_ctest_knn + 1/recall_ctest_knn)
+f1_ctest_knn
+
+# Copy Data
+ctraining_2=ctraining
+ctest_2=ctest
+rtraining_2=rtraining
+rtest_2=rtest
+
+# Standardized
+ctraining_2[["lead_time"]] = ctraining_2[["lead_time"]]/sd(ctraining_2[["lead_time"]])
+ctraining_2[["arrival_date_year"]] = ctraining_2[["arrival_date_year"]]/sd(ctraining_2[["arrival_date_year"]])
+ctraining_2[["arrival_date_month"]] = ctraining_2[["arrival_date_month"]]/sd(ctraining_2[["arrival_date_month"]])
+ctraining_2[["stays_in_weekend_nights"]] = ctraining_2[["stays_in_weekend_nights"]]/sd(ctraining_2[["stays_in_weekend_nights"]])
+ctraining_2[["stays_in_week_nights"]] = ctraining_2[["stays_in_week_nights"]]/sd(ctraining_2[["stays_in_week_nights"]])
+ctraining_2[["adults"]] = ctraining_2[["adults"]]/sd(ctraining_2[["adults"]])
+ctraining_2[["children"]] = ctraining_2[["children"]]/sd(ctraining_2[["children"]])
+ctraining_2[["babies"]] = ctraining_2[["babies"]]/sd(ctraining_2[["babies"]])
+ctraining_2[["booking_changes"]] = ctraining_2[["booking_changes"]]/sd(ctraining_2[["booking_changes"]])
+ctraining_2[["adr"]] = ctraining_2[["adr"]]/sd(ctraining_2[["adr"]])
+ctraining_2[["total_of_special_requests"]] = ctraining_2[["total_of_special_requests"]]/sd(ctraining_2[["total_of_special_requests"]])
+
+ctest_2[["lead_time"]] = ctest_2[["lead_time"]]/sd(ctest_2[["lead_time"]])
+ctest_2[["arrival_date_year"]] = ctest_2[["arrival_date_year"]]/sd(ctest_2[["arrival_date_year"]])
+ctest_2[["arrival_date_month"]] = ctest_2[["arrival_date_month"]]/sd(ctest_2[["arrival_date_month"]])
+ctest_2[["stays_in_weekend_nights"]] = ctest_2[["stays_in_weekend_nights"]]/sd(ctest_2[["stays_in_weekend_nights"]])
+ctest_2[["stays_in_week_nights"]] = ctest_2[["stays_in_week_nights"]]/sd(ctest_2[["stays_in_week_nights"]])
+ctest_2[["adults"]] = ctest_2[["adults"]]/sd(ctest_2[["adults"]])
+ctest_2[["children"]] = ctest_2[["children"]]/sd(ctest_2[["children"]])
+ctest_2[["babies"]] = ctest_2[["babies"]]/sd(ctest_2[["babies"]])
+ctest_2[["booking_changes"]] = ctest_2[["booking_changes"]]/sd(ctest_2[["booking_changes"]])
+ctest_2[["adr"]] = ctest_2[["adr"]]/sd(ctest_2[["adr"]])
+ctest_2[["total_of_special_requests"]] = ctest_2[["total_of_special_requests"]]/sd(ctest_2[["total_of_special_requests"]])
+
+ctraining_2[[2]] = as.factor(ctraining_2[[2]])
+ctest_2[[2]] = as.factor(ctest_2[[2]])
+
+rtraining_2[["lead_time"]] = rtraining_2[["lead_time"]]/sd(rtraining_2[["lead_time"]])
+rtraining_2[["arrival_date_year"]] = rtraining_2[["arrival_date_year"]]/sd(rtraining_2[["arrival_date_year"]])
+rtraining_2[["arrival_date_month"]] = rtraining_2[["arrival_date_month"]]/sd(rtraining_2[["arrival_date_month"]])
+rtraining_2[["stays_in_weekend_nights"]] = rtraining_2[["stays_in_weekend_nights"]]/sd(rtraining_2[["stays_in_weekend_nights"]])
+rtraining_2[["stays_in_week_nights"]] = rtraining_2[["stays_in_week_nights"]]/sd(rtraining_2[["stays_in_week_nights"]])
+rtraining_2[["adults"]] = rtraining_2[["adults"]]/sd(rtraining_2[["adults"]])
+rtraining_2[["children"]] = rtraining_2[["children"]]/sd(rtraining_2[["children"]])
+rtraining_2[["babies"]] = rtraining_2[["babies"]]/sd(rtraining_2[["babies"]])
+rtraining_2[["booking_changes"]] = rtraining_2[["booking_changes"]]/sd(rtraining_2[["booking_changes"]])
+rtraining_2[["adr"]] = rtraining_2[["adr"]]/sd(rtraining_2[["adr"]])
+rtraining_2[["total_of_special_requests"]] = rtraining_2[["total_of_special_requests"]]/sd(rtraining_2[["total_of_special_requests"]])
+
+rtest_2[["lead_time"]] = rtest_2[["lead_time"]]/sd(rtest_2[["lead_time"]])
+rtest_2[["arrival_date_year"]] = rtest_2[["arrival_date_year"]]/sd(rtest_2[["arrival_date_year"]])
+rtest_2[["arrival_date_month"]] = rtest_2[["arrival_date_month"]]/sd(rtest_2[["arrival_date_month"]])
+rtest_2[["stays_in_weekend_nights"]] = rtest_2[["stays_in_weekend_nights"]]/sd(rtest_2[["stays_in_weekend_nights"]])
+rtest_2[["stays_in_week_nights"]] = rtest_2[["stays_in_week_nights"]]/sd(rtest_2[["stays_in_week_nights"]])
+rtest_2[["adults"]] = rtest_2[["adults"]]/sd(rtest_2[["adults"]])
+rtest_2[["children"]] = rtest_2[["children"]]/sd(rtest_2[["children"]])
+rtest_2[["babies"]] = rtest_2[["babies"]]/sd(rtest_2[["babies"]])
+rtest_2[["booking_changes"]] = rtest_2[["booking_changes"]]/sd(rtest_2[["booking_changes"]])
+rtest_2[["adr"]] = rtest_2[["adr"]]/sd(rtest_2[["adr"]])
+rtest_2[["total_of_special_requests"]] = rtest_2[["total_of_special_requests"]]/sd(rtest_2[["total_of_special_requests"]])
+
+rtraining_2[[2]] = as.factor(rtraining_2[[2]])
+rtest_2[[2]] = as.factor(rtest_2[[2]])
+
+## Naive Bayes
+# NB for Resort Hotel
+res_nb_r=NaiveBayes(is_canceled~lead_time+arrival_date_year+arrival_date_month+stays_in_weekend_nights+stays_in_week_nights+adults
+                 +children+babies+booking_changes+adr+total_of_special_requests, data=rtraining_2)
+pred_nb_r = predict(res_nb_r, rtest_2)
+# predict vs. true
+cbind(as.numeric(pred_nb_r$class)-1, as.numeric(rtest_2$is_canceled)-1)
+# error count
+err_nb_r = sum(abs(as.numeric(pred_nb_r$class)-as.numeric(rtest_2$is_canceled)))
+err_nb_r
+# Confusion Matrix
+NB_rtest=table(pred_nb_r$class,rtest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_nb = NB_rtest[2,2]/(NB_rtest[2,2]+NB_rtest[2,1])
+recall_rtest_nb = NB_rtest[2,2]/(NB_rtest[2,2]+NB_rtest[1,2])
+f1_rtest_nb = 2/(1/precision_rtest_nb + 1/recall_rtest_nb)
+f1_rtest_nb
+
+# NB for City Hotel
+res_nb_c=NaiveBayes(is_canceled~lead_time+arrival_date_year+arrival_date_month+stays_in_weekend_nights+stays_in_week_nights+adults
+                 +children+babies+booking_changes+adr+total_of_special_requests, data=ctraining_2)
+pred_nb_c = predict(res_nb_c, ctest_2)
+#predict vs. true
+cbind(as.numeric(pred_nb_2$class)-1, as.numeric(ctest_2$is_canceled)-1)
+#error count
+err_nb_c = sum(abs(as.numeric(pred_nb_c$class)-as.numeric(ctest_2$is_canceled)))
+err_nb_c
+# Confusion Matrix
+NB_ctest=table(pred_nb_c$class,ctest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_ctest_nb = NB_ctest[2,2]/(NB_ctest[2,2]+NB_ctest[2,1])
+recall_ctest_nb = NB_ctest[2,2]/(NB_ctest[2,2]+NB_ctest[1,2])
+f1_ctest_nb = 2/(1/precision_ctest_nb + 1/recall_ctest_nb)
+f1_ctest_nb
+
+## Support Vector Machine
+# SVM for Reosrt Hotel
+train_svm_r = rtraining_2[c(3:10,15:17,20,24:27)]
+test_svm_r = rtest_2[c(3:10,15:17,20,24:27)]
+
+# Linear kernel
+res_svm_r_l = svm(train_svm_r, as.factor(rtraining_2$is_canceled), kernel = "linear")
+pred_svm_r_l = predict(res_svm_r_l, test_svm_r)
+pred_svm_r_l
+# predict vs. true
+cbind(as.numeric(pred_svm_r_l)-1, rtest_2$is_canceled)
+# error count
+err_svm_r_l = sum(abs(as.numeric(pred_svm_r_l)-1-rtest_2$is_canceled))
+err_svm_r_l
+# Confusion Matrix
+SVM_rtest_l=table(pred_svm_r_l,rtest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_svm_l = SVM_rtest_l[2,2]/(SVM_rtest_l[2,2]+SVM_rtest_l[2,1])
+recall_rtest_svm_l = SVM_rtest_l[2,2]/(SVM_rtest_l[2,2]+SVM_rtest_l[1,2])
+f1_rtest_svm_l = 2/(1/precision_rtest_svm_l + 1/recall_rtest_svm_l)
+f1_rtest_svm_l
+
+# Polynomial kernel
+res_svm_r_p = svm(train_svm_r, as.factor(rtraining_2$is_canceled), kernel = "polynomial")
+pred_svm_r_p = predict(res_svm_r_p, test_svm_r)
+pred_svm_r_p
+# predict vs. true
+cbind(as.numeric(pred_svm_r_p)-1, rtest_2$is_canceled)
+# error count
+err_svm_r_p= sum(abs(as.numeric(pred_svm_r_p)-1-rtest_2$is_canceled))
+err_svm_r_p
+# Confusion Matrix
+SVM_rtest_p=table(pred_svm_r_p,rtest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_svm_p = SVM_rtest_p[2,2]/(SVM_rtest_p[2,2]+SVM_rtest_p[2,1])
+recall_rtest_svm_p = SVM_rtest_p[2,2]/(SVM_rtest_p[2,2]+SVM_rtest_p[1,2])
+f1_rtest_svm_p = 2/(1/precision_rtest_svm_p + 1/recall_rtest_svm_p)
+f1_rtest_svm_p
+
+# SVM for City Hotel
+train_svm_c = ctraining_2[c(3:10,15:17,20,24:27)]
+test_svm_c = ctest_2[c(3:10,15:17,20,24:27)]
+
+# Linear kernel
+res_svm_c_l = svm(train_svm_c, as.factor(ctraining_2$is_canceled), kernel = "linear")
+pred_svm_c_l = predict(res_svm_c_l, test_svm_c)
+pred_svm_c_l
+# predict vs. true
+cbind(as.numeric(pred_svm_c_l)-1, ctest_2$is_canceled)
+# error count
+err_svm_c_l = sum(abs(as.numeric(pred_svm_c_l)-1-ctest_2$is_canceled))
+err_svm_c_l
+# Confusion Matrix
+SVM_ctest_l=table(pred_svm_c_l,ctest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_ctest_svm_l = SVM_ctest_l[2,2]/(SVM_ctest_l[2,2]+SVM_ctest_l[2,1])
+recall_ctest_svm_l = SVM_ctest_l[2,2]/(SVM_ctest_l[2,2]+SVM_ctest_l[1,2])
+f1_ctest_svm_l = 2/(1/precision_ctest_svm_l + 1/recall_ctest_svm_l)
+f1_ctest_svm_l
+
+# Polynomial kernel
+res_svm_c_p = svm(train_svm_c, as.factor(ctraining_2$is_canceled), kernel = "polynomial")
+pred_svm_c_p = predict(res_svm_c_p, test_svm_c)
+pred_svm_c_p
+# predict vs. true
+cbind(as.numeric(pred_svm_c_p)-1, ctest_2$is_canceled)
+# error count
+err_svm_c_p= sum(abs(as.numeric(pred_svm_c_p)-1-ctest_2$is_canceled))
+err_svm_c_p
+# Confusion Matrix
+SVM_ctest_p=table(pred_svm_c_p,ctest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_ctest_svm_p = SVM_ctest_p[2,2]/(SVM_ctest_p[2,2]+SVM_ctest_p[2,1])
+recall_ctest_svm_p = SVM_ctest_p[2,2]/(SVM_ctest_p[2,2]+SVM_ctest_p[1,2])
+f1_ctest_svm_p = 2/(1/precision_ctest_svm_p + 1/recall_ctest_svm_p)
+f1_ctest_svm_p
+
+## Random Forest
+# Random Forest for Resort Hotel
+rfmodel_r = randomForest(as.factor(is_canceled) ~ lead_time+arrival_date_year+arrival_date_month
+                         +stays_in_weekend_nights+stays_in_week_nights
+                         +adults+children+babies+meal
+                         +market_segment+distribution_channel
+                         +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled+reserved_room_type
+                         +assigned_room_type+booking_changes+deposit_type
+                         +adr
+                         +required_car_parking_spaces+total_of_special_requests+PRT, data = rtraining, importance = TRUE, na.action=na.omit, ntree = 50)
+varImpPlot(rfmodel_r)
+#predict on the testing data
+RF_rtest = table(predict(rfmodel_r, rtest, type="class"), rtest$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_rf = RF_rtest[2,2]/(RF_rtest[2,2]+RF_rtest[2,1])
+recall_rtest_rf = RF_rtest[2,2]/(RF_rtest[2,2]+RF_rtest[1,2])
+f1_rtest_rf = 2/(1/precision_rtest_rf + 1/recall_rtest_rf)
+f1_rtest_rf
+
+# Random Forest for City Hotel
+rfmodel_c = randomForest(as.factor(is_canceled) ~ lead_time+arrival_date_year+arrival_date_month
+                         +stays_in_weekend_nights+stays_in_week_nights
+                         +adults+children+babies+meal
+                         +market_segment+distribution_channel
+                         +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled+reserved_room_type
+                         +assigned_room_type+booking_changes+deposit_type
+                         +adr
+                         +required_car_parking_spaces+total_of_special_requests+PRT, data = ctraining, importance = TRUE, na.action=na.omit, ntree = 50)
+varImpPlot(rfmodel_c)
+#predict on the testing data
+RF_ctest = table(predict(rfmodel_c, ctest, type="class"), ctest$is_canceled)
+# Precision & Recall & F1 score
+precision_ctest_rf = RF_ctest[2,2]/(RF_ctest[2,2]+RF_ctest[2,1])
+recall_ctest_rf = RF_ctest[2,2]/(RF_ctest[2,2]+RF_ctest[1,2])
+f1_ctest_rf = 2/(1/precision_ctest_rf + 1/recall_ctest_rf)
+f1_ctest_rf
+
+## Logistic Regression
+# Logistic Regression for City Hotel
+# Full Model Search
+lr_cy = ctraining_2$is_canceled
+lr_cx = ctraining_2[c(3:10,15:17,20,24:27)]
+lr_cout_fmr = leaps(lr_cx,lr_cy,method="Cp", nbest = 1)
+print(lr_cout_fmr)
+# Model
+res_lr_c = glm(is_canceled~lead_time+arrival_date_year+arrival_date_month
+               +stays_in_weekend_nights+stays_in_week_nights
+               +adults+children
+               +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled
+               +booking_changes
+               +adr
+               +required_car_parking_spaces+total_of_special_requests+PRT, data=ctraining_2,family="binomial")
+summary(res_lr_c)
+logit_probs_c = predict(res_lr_c,newdata = ctest_2, type = "response")
+logit_class_c = rep("1",nrow(ctest_2))
+logit_class_c[logit_probs_c <0.41] = "0" 
+#predict on the testing data
+LR_ctest = table(logit_class_c, ctest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_ctest_lr = LR_ctest[2,2]/(LR_ctest[2,2]+LR_ctest[2,1])
+recall_ctest_lr = LR_ctest[2,2]/(LR_ctest[2,2]+LR_ctest[1,2])
+f1_ctest_lr = 2/(1/precision_ctest_lr + 1/recall_ctest_lr)
+f1_ctest_lr
+
+# Logistic Regression for Resort Hotel
+# Full Model Search
+lr_ry = rtraining_2$is_canceled
+lr_rx = rtraining_2[c(3:10,15:17,20,24:27)]
+lr_rout_fmr = leaps(lr_rx,lr_ry,method="Cp", nbest = 1)
+print(lr_rout_fmr)
+# Model
+res_lr_r = glm(is_canceled~lead_time+arrival_date_year+arrival_date_month
+               +stays_in_weekend_nights
+               +adults+children+babies
+               +is_repeated_guest+previous_cancellations+previous_bookings_not_canceled
+               +booking_changes
+               +adr
+               +required_car_parking_spaces+total_of_special_requests+PRT, data=rtraining_2,family="binomial")
+summary(res_lr_r)
+logit_probs_r = predict(res_lr_r,newdata = rtest_2, type = "response")
+logit_class_r = rep("1",nrow(rtest_2))
+logit_class_r[logit_probs_r <0.28] = "0" 
+#predict on the testing data
+LR_rtest = table(logit_class_r, rtest_2$is_canceled)
+# Precision & Recall & F1 score
+precision_rtest_lr = LR_rtest[2,2]/(LR_rtest[2,2]+LR_rtest[2,1])
+recall_rtest_lr = LR_rtest[2,2]/(LR_rtest[2,2]+LR_rtest[1,2])
+f1_rtest_lr = 2/(1/precision_rtest_lr + 1/recall_rtest_lr)
+f1_rtest_lr
+
+# Evaluation
+# Precision for City Hotel
+precision_ctest_ctpruned
+precision_ctest_gbm
+precision_ctest_knn
+precision_ctest_nb
+precision_ctest_svm_l
+precision_ctest_svm_p
+precision_ctest_rf
+precision_ctest_lr
+# Precision for Resort Hotel
+precision_rtest_ctpruned
+precision_rtest_gbm
+precision_rtest_knn
+precision_rtest_nb
+precision_rtest_svm_l
+precision_rtest_svm_p
+precision_rtest_rf
+precision_rtest_lr
+
+# Recall for City Hotel
+recall_ctest_ctpruned
+recall_ctest_gbm
+recall_ctest_knn
+recall_ctest_nb
+recall_ctest_svm_l
+recall_ctest_svm_p
+recall_ctest_rf
+recall_ctest_lr
+# Recall for Resort Hotel
+recall_rtest_ctpruned
+recall_rtest_gbm
+recall_rtest_knn
+recall_rtest_nb
+recall_rtest_svm_l
+recall_rtest_svm_p
+recall_rtest_rf
+recall_rtest_lr
+
+# F1 Scores for City Hotel
+f1_ctest_ctpruned
+f1_ctest_gbm
+f1_ctest_knn
+f1_ctest_nb
+f1_ctest_svm_l
+f1_ctest_svm_p
+f1_ctest_rf
+f1_ctest_lr
+# F1 Scores For Resort Hotel
+f1_rtest_ctpruned
+f1_rtest_gbm
+f1_rtest_knn
+f1_rtest_nb
+f1_rtest_svm_l
+f1_rtest_svm_p
+f1_rtest_rf
+f1_rtest_lr
